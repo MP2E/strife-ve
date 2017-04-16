@@ -200,13 +200,13 @@ endif()
 # opl
 add_sources(opl
 	opl.c
+	opl3.c
 	opl_linux.c
 	opl_obsd.c
 	opl_queue.c
 	opl_sdl.c
 	opl_timer.c
 	ioperm_sys.c
-	dbopl.c
 )
 
 # textscreen

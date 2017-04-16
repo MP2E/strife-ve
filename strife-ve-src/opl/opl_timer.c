@@ -91,8 +91,8 @@ static int CallbackWaiting(uint64_t *next_time)
 
 static uint64_t GetNextTime(void)
 {
-    opl_callback_t callback = NULL;
-    void *callback_data = NULL;
+    opl_callback_t callback;
+    void *callback_data;
     uint64_t next_time;
     int have_callback;
 
@@ -184,7 +184,7 @@ int OPL_Timer_StartThread(void)
     opl_timer_paused = 0;
     pause_offset = 0;
 
-    timer_thread = SDL_CreateThread(ThreadFunction, NULL);
+    timer_thread = SDL_CreateThread(ThreadFunction, "OPL timer thread", NULL);
 
     if (timer_thread == NULL)
     {
