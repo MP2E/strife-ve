@@ -38,7 +38,7 @@ set(PROGRAM_PREFIX "chocolate-")
 ## Options
 ##
 
-option(ENABLE_SDL2 "Build with SDL2 support." OFF)
+option(ENABLE_SDL2 "Build with SDL2 support." ON)
 option(ENABLE_STEAM "Build with Steamworks support." OFF)
 option(ENABLE_GOG "Build GOG version for Linux." OFF)
 
@@ -212,6 +212,7 @@ add_sources(opl
 # textscreen
 add_sources(textscreen
 	txt_button.c
+	txt_conditional.c
 	txt_checkbox.c
 	txt_desktop.c
 	txt_dropdown.c
