@@ -4342,11 +4342,6 @@ static __inline void glUnlockArraysEXT_DEBUG (const char* file, int line)
 extern boolean has_GL_EXT_multi_draw_arrays;
 
 #ifndef __IPHONEOS__
-typedef void (APIENTRYP PFNGLMULTIDRAWARRAYSEXTPROC) (GLenum mode, GLint* first, GLsizei* count, GLsizei primcount);
-typedef void (APIENTRYP PFNGLMULTIDRAWELEMENTSEXTPROC) (GLenum mode, const GLsizei* count, GLenum type, const GLvoid** indices, GLsizei primcount);
-#endif // __IPHONEOS__
-
-#ifndef __IPHONEOS__
 extern PFNGLMULTIDRAWARRAYSEXTPROC _glMultiDrawArraysEXT;
 extern PFNGLMULTIDRAWELEMENTSEXTPROC _glMultiDrawElementsEXT;
 #endif // __IPHONEOS__
