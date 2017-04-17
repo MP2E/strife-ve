@@ -39,12 +39,12 @@
 // [SVE] svillarreal - from gl scale branch
 #include "i_glscale.h"
 
+#include "i_input.h"
 #include "i_joystick.h"
 #include "i_system.h"
 #include "i_swap.h"
 #include "i_timer.h"
 #include "i_video.h"
-#include "i_scale.h"
 #include "m_argv.h"
 #include "m_config.h"
 #include "m_misc.h"
@@ -63,85 +63,6 @@
 
 #include "i_social.h"
 
-// [SVE]: Track whether or not we see mouse events
-boolean i_seemouses;
-
-// Lookup table for mapping ASCII characters to their equivalent when
-// shift is pressed on an American layout keyboard:
-
-static const char shiftxform[] =
-{
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-    21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
-    31, ' ', '!', '"', '#', '$', '%', '&',
-    '"', // shift-'
-    '(', ')', '*', '+',
-    '<', // shift-,
-    '_', // shift--
-    '>', // shift-.
-    '?', // shift-/
-    ')', // shift-0
-    '!', // shift-1
-    '@', // shift-2
-    '#', // shift-3
-    '$', // shift-4
-    '%', // shift-5
-    '^', // shift-6
-    '&', // shift-7
-    '*', // shift-8
-    '(', // shift-9
-    ':',
-    ':', // shift-;
-    '<',
-    '+', // shift-=
-    '>', '?', '@',
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
-    'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-    '[', // shift-[
-    '!', // shift-backslash - OH MY GOD DOES WATCOM SUCK
-    ']', // shift-]
-    '"', '_',
-    '\'', // shift-`
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N',
-    'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-    '{', '|', '}', '~', 127
-};
-
-
-#define LOADING_DISK_W 16
-#define LOADING_DISK_H 16
-
-// Non aspect ratio-corrected modes (direct multiples of 320x200)
-
-static screen_mode_t *screen_modes[] = {
-    &mode_scale_1x,
-    &mode_scale_2x,
-    &mode_scale_3x,
-    &mode_scale_4x,
-    &mode_scale_5x,
-};
-
-// Aspect ratio corrected modes (4:3 ratio)
-
-static screen_mode_t *screen_modes_corrected[] = {
-
-    // Vertically stretched modes (320x200 -> 320x240 and multiples)
-
-    &mode_stretch_1x,
-    &mode_stretch_2x,
-    &mode_stretch_3x,
-    &mode_stretch_4x,
-    &mode_stretch_5x,
-
-    // Horizontally squashed modes (320x200 -> 256x200 and multiples)
-
-    &mode_squash_1x,
-    &mode_squash_2x,
-    &mode_squash_3x,
-    &mode_squash_4x,
-    &mode_squash_5x,
-};
 
 // SDL video driver name
 
@@ -178,16 +99,6 @@ static boolean initialized = false;
 
 static boolean nomouse = false;
 int usemouse = 1;
-
-// Bit mask of mouse button state.
-
-static unsigned int mouse_button_state = 0;
-
-// Disallow mouse and joystick movement to cause forward/backward
-// motion.  Specified with the '-novert' command line parameter.
-// This is an int to allow saving to config file
-
-int novert = 0;
 
 // Save screenshots in PNG format.
 
@@ -273,20 +184,14 @@ static boolean noblit;
 static grabmouse_callback_t grabmouse_callback = NULL;
 static warpmouse_callback_t warpmouse_callback = NULL; // haleyjd [SVE]
 
-// disk image data and background overwritten by the disk to be
-// restored by EndRead
+// disk image patch name (either STDISK or STCDROM) and
+// background overwritten by the disk to be restored by EndRead
 
-static byte *disk_image = NULL;
-static byte *saved_background;
-static boolean window_focused;
+static boolean window_focused = true;
 
 // Empty mouse cursor
 
 static SDL_Cursor *cursors[2];
-
-// The screen mode and scale functions being used
-
-static screen_mode_t *screen_mode;
 
 // Window resize state.
 
@@ -294,37 +199,9 @@ static boolean need_resize = false;
 static unsigned int resize_w, resize_h;
 static unsigned int last_resize_time;
 
-// If true, keyboard mapping is ignored, like in Vanilla Doom.
-// The sensible thing to do is to disable this if you have a non-US
-// keyboard.
-
-int vanilla_keyboard_mapping = false; // haleyjd [SVE]: false by default
-
-// Is the shift key currently down?
-
-static int shiftdown = 0;
-
-// Mouse acceleration
-//
-// This emulates some of the behavior of DOS mouse drivers by increasing
-// the speed when the mouse is moved fast.
-//
-// The mouse input values are input directly to the game, but when
-// the values exceed the value of mouse_threshold, they are multiplied
-// by mouse_acceleration to increase the speed.
-
-float mouse_acceleration = 2.0;
-int mouse_threshold = 10;
-boolean mouse_invert = false;   // [SVE] svillarreal
-boolean mouse_enable_acceleration = false; // [SVE] svillarreal
-boolean mouse_smooth = false; // [SVE] svillarreal
-int mouse_scale = 2;
-
 // Gamma correction level to use
 
 int usegamma = 0;
-
-static void ApplyWindowResize(unsigned int w, unsigned int h);
 
 static boolean MouseShouldBeGrabbed()
 {
@@ -396,31 +273,6 @@ void I_DisplayFPSDots(boolean dots_on)
     display_fps_dots = dots_on;
 }
 
-// Update the value of window_focused when we get a focus event
-//
-// We try to make ourselves be well-behaved: the grab on the mouse
-// is removed if we lose focus (such as a popup window appearing),
-// and we dont move the mouse around if we aren't focused either.
-
-static void UpdateFocus(void)
-{
-    Uint8 state;
-
-    state = SDL_GetAppState();
-
-    // We should have input (keyboard) focus and be visible 
-    // (not minimized)
-
-    window_focused = (state & SDL_APPINPUTFOCUS) && (state & SDL_APPACTIVE);
-
-    if(gAppServices->OverlayActive())
-        window_focused = false;
-
-    // Should the screen be grabbed?
-
-    screenvisible = (state & SDL_APPACTIVE) != 0;
-}
-
 // Show or hide the mouse cursor. We have to use different techniques
 // depending on the OS.
 
@@ -464,59 +316,6 @@ void I_SetShowVisualCursor(boolean show)
 #else
     SDL_ShowCursor(0);
 #endif
-}
-
-void I_EnableLoadingDisk(void)
-{
-    patch_t *disk;
-    byte *tmpbuf;
-    char *disk_name;
-    int y;
-    char buf[20];
-
-    SDL_VideoDriverName(buf, 15);
-
-    if (!strcmp(buf, "Quartz"))
-    {
-        // MacOS Quartz gives us pageflipped graphics that screw up the 
-        // display when we use the loading disk.  Disable it.
-        // This is a gross hack.
-
-        return;
-    }
-
-    if (M_CheckParm("-cdrom") > 0)
-        disk_name = DEH_String("STCDROM");
-    else
-        disk_name = DEH_String("STDISK");
-
-    disk = W_CacheLumpName(disk_name, PU_STATIC);
-
-    // Draw the patch into a temporary buffer
-
-    tmpbuf = Z_Malloc(SCREENWIDTH * (disk->height + 1), PU_STATIC, NULL);
-    V_UseBuffer(tmpbuf);
-
-    // Draw the disk to the screen:
-
-    V_DrawPatch(0, 0, disk);
-
-    disk_image = Z_Malloc(LOADING_DISK_W * LOADING_DISK_H, PU_STATIC, NULL);
-    saved_background = Z_Malloc(LOADING_DISK_W * LOADING_DISK_H, PU_STATIC, NULL);
-
-    for (y=0; y<LOADING_DISK_H; ++y) 
-    {
-        memcpy(disk_image + LOADING_DISK_W * y,
-               tmpbuf + SCREENWIDTH * y,
-               LOADING_DISK_W);
-    }
-
-    // All done - free the screen buffer and restore the normal 
-    // video buffer.
-
-    W_ReleaseLumpName(disk_name);
-    V_RestoreBuffer();
-    Z_Free(tmpbuf);
 }
 
 //
@@ -643,157 +442,6 @@ void I_StartFrame (void)
 }
 
 //
-// I_ClearMouseButtonState
-//
-// [SVE] svillarreal
-//
-
-void I_ClearMouseButtonState(void)
-{
-    mouse_button_state = 0;
-}
-
-static void UpdateMouseButtonState(unsigned int button, boolean on)
-{
-    event_t event;
-
-    if (button < SDL_BUTTON_LEFT || button > MAX_MOUSE_BUTTONS)
-    {
-        return;
-    }
-
-    // Note: button "0" is left, button "1" is right,
-    // button "2" is middle for Doom.  This is different
-    // to how SDL sees things.
-
-    switch (button)
-    {
-        case SDL_BUTTON_LEFT:
-            button = 0;
-            break;
-
-        case SDL_BUTTON_RIGHT:
-            button = 1;
-            break;
-
-        case SDL_BUTTON_MIDDLE:
-            button = 2;
-            break;
-
-        default:
-            // SDL buttons are indexed from 1.
-            --button;
-            break;
-    }
-
-    // Turn bit representing this button on or off.
-
-    if (on)
-    {
-        mouse_button_state |= (1 << button);
-    }
-    else
-    {
-        mouse_button_state &= ~(1 << button);
-    }
-
-    // Post an event with the new button state.
-
-    event.type = ev_mousebutton;
-    event.data1 = mouse_button_state;
-    event.data2 = event.data3 = 0;
-    D_PostEvent(&event);
-    i_seemouses = true;
-    i_seejoysticks = false;
-}
-
-static int AccelerateMouse(int val)
-{
-    if(mouse_acceleration <= 0 || !mouse_enable_acceleration)
-        return val;
-
-    if (val < 0)
-        return -AccelerateMouse(-val);
-
-    if (val > mouse_threshold)
-    {
-        return (int)((val - mouse_threshold) * mouse_acceleration + mouse_threshold);
-    }
-    else
-    {
-        return val;
-    }
-}
-
-// Get the equivalent ASCII (Unicode?) character for a keypress.
-
-static int GetTypedChar(SDL_Event *event)
-{
-    int key;
-
-    // If Vanilla keyboard mapping enabled, the keyboard
-    // scan code is used to give the character typed.
-    // This does not change depending on keyboard layout.
-    // If you have a German keyboard, pressing 'z' will
-    // give 'y', for example.  It is desirable to be able
-    // to fix this so that people with non-standard 
-    // keyboard mappings can type properly.  If vanilla
-    // mode is disabled, use the properly translated 
-    // version.
-
-    if (vanilla_keyboard_mapping)
-    {
-        key = TranslateKey(&event->key.keysym);
-
-        // Is shift held down?  If so, perform a translation.
-
-        if (shiftdown > 0)
-        {
-            if (key >= 0 && key < arrlen(shiftxform))
-            {
-                key = shiftxform[key];
-            }
-            else
-            {
-                key = 0;
-            }
-        }
-
-        return key;
-    }
-    else
-    {
-        // Unicode value, from key layout.
-
-        return tolower(event->key.keysym.unicode);
-    }
-}
-
-static void UpdateShiftStatus(SDL_Event *event)
-{
-    int change;
-
-    if (event->type == SDL_KEYDOWN)
-    {
-        change = 1;
-    }
-    else if (event->type == SDL_KEYUP)
-    {
-        change = -1;
-    }
-    else
-    {
-        return;
-    }
-
-    if (event->key.keysym.sym == SDLK_LSHIFT 
-     || event->key.keysym.sym == SDLK_RSHIFT)
-    {
-        shiftdown += change;
-    }
-}
-
-//
 // haleyjd 20141004: [SVE] Get true mouse position
 //
 void I_GetAbsoluteMousePosition(int *x, int *y)
@@ -833,248 +481,63 @@ void I_GetAbsoluteMousePosition(int *x, int *y)
     }
 }
 
+
 void I_GetEvent(void)
 {
-    static boolean ate_shift_tab;
+    extern void I_HandleKeyboardEvent(SDL_Event *sdlevent);
+    extern void I_HandleMouseEvent(SDL_Event *sdlevent);
     SDL_Event sdlevent;
-    event_t event;
 
-    // possibly not needed
-    
     SDL_PumpEvents();
 
-    // haleyjd: [SVE] overlays with shift+tab issues need to purge the event 
-    // queue and update focus status when exiting the overlay.
-    if(ate_shift_tab && !gAppServices->OverlayActive())
-    {
-        SDL_Event ev;
-        while(SDL_PollEvent(&ev));
-        SDL_EnableKeyRepeat(SDL_DEFAULT_REPEAT_DELAY, SDL_DEFAULT_REPEAT_INTERVAL);
-        UpdateFocus();
-        ate_shift_tab = false;
-    }
-
-    // put event-grabbing stuff in here
-    
     while (SDL_PollEvent(&sdlevent))
     {
-        if(gAppServices->OverlayEventFilter(sdlevent.type))
-            continue;
-
-        // ignore mouse events when the window is not focused
-
-        if (!window_focused 
-         && (sdlevent.type == SDL_MOUSEMOTION
-          || sdlevent.type == SDL_MOUSEBUTTONDOWN
-          || sdlevent.type == SDL_MOUSEBUTTONUP))
-        {
-            continue;
-        }
-
-        if (screensaver_mode && sdlevent.type == SDL_QUIT)
-        {
-            I_Quit();
-        }
-
-        UpdateShiftStatus(&sdlevent);
-
-        // process event
-        
         switch (sdlevent.type)
         {
             case SDL_KEYDOWN:
-                // haleyjd: [SVE] some overlays have an issue with shift+tab
-                if(gAppServices->OverlayEatsShiftTab())
+                if (ToggleFullScreenKeyShortcut(&sdlevent.key.keysym))
                 {
-                    // Going into the overlay?
-                    if(sdlevent.key.keysym.sym == SDLK_TAB && shiftdown)
-                    {
-                        // ignore the event and remember it
-                        ate_shift_tab = true;
-                        SDL_EnableKeyRepeat(0, 0);
-                        break;
-                    }
+                    I_ToggleFullScreen();
+                    break;
                 }
-
-                // data1 has the key pressed, data2 has the character
-                // (shift-translated, etc)
-                event.type = ev_keydown;
-                event.data1 = TranslateKey(&sdlevent.key.keysym);
-                event.data2 = GetTypedChar(&sdlevent);
-
-                if (event.data1 != 0)
-                {
-                    D_PostEvent(&event);
-                }
-                break;
+                // deliberate fall-though
 
             case SDL_KEYUP:
-                event.type = ev_keyup;
-                event.data1 = TranslateKey(&sdlevent.key.keysym);
-
-                // data2 is just initialized to zero for ev_keyup.
-                // For ev_keydown it's the shifted Unicode character
-                // that was typed, but if something wants to detect
-                // key releases it should do so based on data1
-                // (key ID), not the printable char.
-
-                event.data2 = 0;
-
-                if (event.data1 != 0)
-                {
-                    D_PostEvent(&event);
-                }
+                I_HandleKeyboardEvent(&sdlevent);
                 break;
-
-                /*
-            case SDL_MOUSEMOTION:
-                event.type = ev_mouse;
-                event.data1 = mouse_button_state;
-                event.data2 = AccelerateMouse(sdlevent.motion.xrel);
-                event.data3 = -AccelerateMouse(sdlevent.motion.yrel);
-                D_PostEvent(&event);
-                break;
-                */
 
             case SDL_MOUSEBUTTONDOWN:
-                if (usemouse && !nomouse)
-                {
-                    UpdateMouseButtonState(sdlevent.button.button, true);
-                }
-                break;
-
             case SDL_MOUSEBUTTONUP:
-                if (usemouse && !nomouse)
+            case SDL_MOUSEWHEEL:
+                if (usemouse && !nomouse && window_focused)
                 {
-                    UpdateMouseButtonState(sdlevent.button.button, false);
+                    I_HandleMouseEvent(&sdlevent);
                 }
                 break;
 
             case SDL_QUIT:
-                event.type = ev_quit;
-                D_PostEvent(&event);
+                if (screensaver_mode)
+                {
+                    I_Quit();
+                }
+                else
+                {
+                    event_t event;
+                    event.type = ev_quit;
+                    D_PostEvent(&event);
+                }
                 break;
 
-            case SDL_ACTIVEEVENT:
-                // need to update our focus state
-                UpdateFocus();
+            case SDL_WINDOWEVENT:
+                if (sdlevent.window.windowID == SDL_GetWindowID(screen))
+                {
+                    HandleWindowEvent(&sdlevent.window);
+                }
                 break;
-
-            case SDL_VIDEOEXPOSE:
-                palette_to_set = true;
-                break;
-
-                // [SVE] svillarreal - this is a huge hassle to support with
-                // the OpenGL context
-#if 0
-            case SDL_RESIZABLE:
-                need_resize = true;
-                resize_w = sdlevent.resize.w;
-                resize_h = sdlevent.resize.h;
-                last_resize_time = SDL_GetTicks();
-                break;
-#endif
 
             default:
                 break;
         }
-    }
-}
-
-// Warp the mouse back to the middle of the screen
-
-static void CenterMouse(void)
-{
-    // Warp the the screen center
-
-    SDL_WarpMouse(screen->w / 2, screen->h / 2);
-
-    // Clear any relative movement caused by warping
-
-    SDL_PumpEvents();
-#if SDL_VERSION_ATLEAST(1, 3, 0)
-    SDL_GetRelativeMouseState(0, NULL, NULL);
-#else
-    SDL_GetRelativeMouseState(NULL, NULL);
-#endif
-}
-
-//
-// Read the change in mouse state to generate mouse motion events
-//
-// This is to combine all mouse movement for a tic into one mouse
-// motion event.
-
-static void I_ReadMouse(void)
-{
-    static int last_x = 0, last_y = 0;
-    static boolean did_filter = false;
-    int x, y;
-    event_t ev;
-
-    // if the app services overlay would filter out mouse motion events,
-    // then do not read the raw mouse position here either.
-    if(gAppServices->OverlayEventFilter(SDL_MOUSEMOTION))
-    {
-        did_filter = true;
-        return;
-    }
-    else if(did_filter)
-    {
-        // we need to warp the mouse if the condition above was true and 
-        // then stops being so.
-        CenterMouse();
-        did_filter = false;
-    }
-
-#if SDL_VERSION_ATLEAST(1, 3, 0)
-    SDL_GetRelativeMouseState(0, &x, &y);
-#else
-    SDL_GetRelativeMouseState(&x, &y);
-#endif
-
-    // [SVE] svillarreal
-    if(mouse_scale > 4) mouse_scale = 4;
-    if(mouse_scale < 0) mouse_scale = 0;
-
-    if(x != 0 || y != 0) 
-    {
-        // [SVE] svillarreal
-        if(mouse_scale > 0)
-        {
-            x *= (1 + mouse_scale);
-            y *= (0 + mouse_scale);
-        }
-
-        ev.type = ev_mouse;
-        ev.data1 = 0;
-        ev.data2 = AccelerateMouse(mouse_smooth ? ((x + last_x) / 2) : x);
-
-        // [SVE]: "novert" not supported with this meaning; instead we disable
-        // mouse look, since we don't support moving forward with the mouse, and
-        // we require it to be active in the menus.
-        //if (!novert)
-        {
-            ev.data3 = -AccelerateMouse(mouse_smooth ? ((y + last_y) / 2) : y);
-        }
-        /*
-        else
-        {
-            ev.data3 = 0;
-        }
-        */
-        
-        D_PostEvent(&ev);
-        i_seemouses = true;
-        i_seejoysticks = false;
-
-        last_x = x;
-        last_y = y;
-    }
-
-    if (MouseShouldBeGrabbed())
-    {
-        CenterMouse();
     }
 }
 
@@ -1133,7 +596,6 @@ static void UpdateGrab(void)
     else if (grab && !currently_grabbed)
     {
         I_SetShowCursor(false);
-        CenterMouse();
     }
     else if (!grab && currently_grabbed)
     {
@@ -1152,122 +614,6 @@ static void UpdateGrab(void)
 
     currently_grabbed = grab;
 
-}
-
-// Update a small portion of the screen
-//
-// Does stretching and buffer blitting if neccessary
-//
-// Return true if blit was successful.
-
-static boolean BlitArea(int x1, int y1, int x2, int y2)
-{
-    int x_offset, y_offset;
-    boolean result;
-
-    // No blit needed on native surface
-
-    if (native_surface)
-    {
-	return true;
-    }
-
-    x_offset = (screenbuffer->w - screen_mode->width) / 2;
-    y_offset = (screenbuffer->h - screen_mode->height) / 2;
-
-    if (SDL_LockSurface(screenbuffer) >= 0)
-    {
-        I_InitScale(I_VideoBuffer,
-                    (byte *) screenbuffer->pixels
-                                + (y_offset * screenbuffer->pitch)
-                                + x_offset,
-                    screenbuffer->pitch);
-        result = screen_mode->DrawScreen(x1, y1, x2, y2);
-      	SDL_UnlockSurface(screenbuffer);
-    }
-    else
-    {
-        result = false;
-    }
-
-    return result;
-}
-
-static void UpdateRect(int x1, int y1, int x2, int y2)
-{
-    int x1_scaled, x2_scaled, y1_scaled, y2_scaled;
-
-    // Do stretching and blitting
-
-    if (BlitArea(x1, y1, x2, y2))
-    {
-        // Update the area
-
-        x1_scaled = (x1 * screen_mode->width) / SCREENWIDTH;
-        y1_scaled = (y1 * screen_mode->height) / SCREENHEIGHT;
-        x2_scaled = (x2 * screen_mode->width) / SCREENWIDTH;
-        y2_scaled = (y2 * screen_mode->height) / SCREENHEIGHT;
-
-        SDL_UpdateRect(screen,
-                       x1_scaled, y1_scaled,
-                       x2_scaled - x1_scaled,
-                       y2_scaled - y1_scaled);
-    }
-}
-
-void I_BeginRead(void)
-{
-    byte *screenloc = I_VideoBuffer
-                    + (SCREENHEIGHT - LOADING_DISK_H) * SCREENWIDTH
-                    + (SCREENWIDTH - LOADING_DISK_W);
-    int y;
-
-    // [SVE] svillarreal - from gl scale branch
-    if (!initialized || disk_image == NULL || using_opengl)
-        return;
-
-    // save background and copy the disk image in
-
-    for (y=0; y<LOADING_DISK_H; ++y)
-    {
-        memcpy(saved_background + y * LOADING_DISK_W,
-               screenloc,
-               LOADING_DISK_W);
-        memcpy(screenloc,
-               disk_image + y * LOADING_DISK_W,
-               LOADING_DISK_W);
-
-        screenloc += SCREENWIDTH;
-    }
-
-    UpdateRect(SCREENWIDTH - LOADING_DISK_W, SCREENHEIGHT - LOADING_DISK_H,
-               SCREENWIDTH, SCREENHEIGHT);
-}
-
-void I_EndRead(void)
-{
-    byte *screenloc = I_VideoBuffer
-                    + (SCREENHEIGHT - LOADING_DISK_H) * SCREENWIDTH
-                    + (SCREENWIDTH - LOADING_DISK_W);
-    int y;
-
-    // [SVE] svillarreal - from gl scale branch
-    if (!initialized || disk_image == NULL || using_opengl)
-        return;
-
-    // save background and copy the disk image in
-
-    for (y=0; y<LOADING_DISK_H; ++y)
-    {
-        memcpy(screenloc,
-               saved_background + y * LOADING_DISK_W,
-               LOADING_DISK_W);
-
-        screenloc += SCREENWIDTH;
-    }
-
-    UpdateRect(SCREENWIDTH - LOADING_DISK_W, SCREENHEIGHT - LOADING_DISK_H,
-               SCREENWIDTH, SCREENHEIGHT);
 }
 
 // [SVE] svillarreal - from gl scale branch
@@ -1355,6 +701,17 @@ void I_FinishUpdate (void)
 	        I_VideoBuffer[ (SCREENHEIGHT-1)*SCREENWIDTH + i] = 0xff;
 	    for ( ; i<20*4 ; i+=4)
 	        I_VideoBuffer[ (SCREENHEIGHT-1)*SCREENWIDTH + i] = 0x0;
+    }
+
+    // show a disk icon if lumps have been read in the previous tic
+
+    if (disk_indicator == disk_on)
+    {
+        V_BeginRead();
+    }
+    else if (disk_indicator == disk_dirty)
+    {
+        disk_indicator = disk_off;
     }
 
     // draw to screen
@@ -2045,28 +1402,6 @@ void I_GraphicsCheckCommandLine(void)
     {
         SetScaleFactor(3);
     }
-
-    //!
-    // @category video
-    //
-    // Disable vertical mouse movement.
-    //
-
-    if (M_CheckParm("-novert"))
-    {
-        novert = true;
-    }
-
-    //!
-    // @category video
-    //
-    // Enable vertical mouse movement.
-    //
-
-    if (M_CheckParm("-nonovert"))
-    {
-        novert = false;
-    }
 }
 
 // Check if we have been invoked as a screensaver by xscreensaver.
@@ -2448,7 +1783,6 @@ void I_InitGraphics(void)
 
     CreateCursors();
 
-    UpdateFocus();
     UpdateGrab();
 
     // On some systems, it takes a second or so for the screen to settle
@@ -2527,17 +1861,9 @@ void I_BindVideoVariables(void)
     M_BindVariable("screen_init",               &screen_init);
     M_BindVariable("screen_bpp",                &screen_bpp);
     M_BindVariable("grabmouse",                 &grabmouse);
-    M_BindVariable("mouse_acceleration",        &mouse_acceleration);
-    M_BindVariable("mouse_threshold",           &mouse_threshold);
-    M_BindVariable("mouse_scale",               &mouse_scale);
-    M_BindVariable("mouse_invert",              &mouse_invert);
-    M_BindVariable("mouse_enable_acceleration", &mouse_enable_acceleration);
-    M_BindVariable("mouse_smooth",              &mouse_smooth);
     M_BindVariable("video_driver",              &video_driver);
     M_BindVariable("window_position",           &window_position);
     M_BindVariable("usegamma",                  &usegamma);
-    M_BindVariable("vanilla_keyboard_mapping",  &vanilla_keyboard_mapping);
-    M_BindVariable("novert",                    &novert);
     M_BindVariable("gl_max_scale",              &gl_max_scale);
     M_BindVariable("png_screenshots",           &png_screenshots);
 

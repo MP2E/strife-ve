@@ -280,6 +280,8 @@ add_sources(src
 	i_galaxyservices.h
 	i_glscale.c
 	i_glscale.h
+	i_input.c
+	i_input.h
 	i_joystick.c
 	i_joystick.h
 	i_main.c
@@ -368,6 +370,8 @@ add_sources(src
 	tables.c
 	tables.h
 
+	v_diskicon.c
+	v_diskicon.h
 	v_patch.h
 	v_video.c
 
