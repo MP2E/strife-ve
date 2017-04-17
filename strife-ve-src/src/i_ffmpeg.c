@@ -41,20 +41,6 @@
 #include "libavutil/time.h"
 
 //
-// because apparently, we still need to use deprecated functions....
-//
-#if defined(__ICL) || defined (__INTEL_COMPILER)
-    #define FF_DISABLE_DEPRECATION_WARNINGS __pragma(warning(push)) __pragma(warning(disable:1478))
-    #define FF_ENABLE_DEPRECATION_WARNINGS  __pragma(warning(pop))
-#elif defined(_MSC_VER)
-    #define FF_DISABLE_DEPRECATION_WARNINGS __pragma(warning(push)) __pragma(warning(disable:4996))
-    #define FF_ENABLE_DEPRECATION_WARNINGS  __pragma(warning(pop))
-#else
-    #define FF_DISABLE_DEPRECATION_WARNINGS _Pragma("GCC diagnostic ignored \"-Wdeprecated-declarations\"")
-    #define FF_ENABLE_DEPRECATION_WARNINGS  _Pragma("GCC diagnostic warning \"-Wdeprecated-declarations\"")
-#endif
-
-//
 // the buffer size passed into the post mix callback routine can vary, depending
 // on the OS. I am expecting at least 4k tops but if needed, it can be bumped to 8k
 //
@@ -301,7 +287,7 @@ static void I_AVDeletePacketQueue(avPacketQueue_t **packetQueue)
             break;
         }
         
-        av_free_packet(packet);
+        av_packet_unref(packet);
     }
 
     free(*packetQueue);
@@ -785,7 +771,7 @@ static void I_AVProcessNextVideoFrame(void)
             }
         }
 
-        av_free_packet(packet);
+        av_packet_unref(packet);
     }
     
     if(frameDone)
@@ -812,33 +798,15 @@ static void I_AVProcessNextVideoFrame(void)
 // I_AVGetBufferProc
 //
 
-FF_DISABLE_DEPRECATION_WARNINGS
-
-static int I_AVGetBufferProc(struct AVCodecContext *c, AVFrame *pic)
+static int I_AVGetBufferProc(struct AVCodecContext *c, AVFrame *pic, int flags)
 {
-    int ret = avcodec_default_get_buffer(c, pic);
+    int ret = avcodec_default_get_buffer2(c, pic, flags);
     uint64_t *pts = av_malloc(sizeof(uint64_t));
     *pts = globalPts;
 
     pic->opaque = pts;
     return ret;
 }
-
-//
-// I_AVReleaseBufferProc
-//
-
-static void I_AVReleaseBufferProc(struct AVCodecContext *c, AVFrame *pic)
-{
-    if(pic)
-    {
-        av_freep(&pic->opaque);
-    }
-
-    avcodec_default_release_buffer(c, pic);
-}
-
-FF_ENABLE_DEPRECATION_WARNINGS
 
 //=============================================================================
 //
@@ -979,10 +947,7 @@ static boolean I_AVLoadVideo(const char *filename)
     texture.width = texture.origwidth;
     texture.height = texture.origheight;
 
-FF_DISABLE_DEPRECATION_WARNINGS
-    videoCodecCtx->get_buffer = I_AVGetBufferProc;
-    videoCodecCtx->release_buffer = I_AVReleaseBufferProc;
-FF_ENABLE_DEPRECATION_WARNINGS
+    videoCodecCtx->get_buffer2 = I_AVGetBufferProc;
     
     videoFrame = av_frame_alloc();
 
@@ -1126,12 +1091,12 @@ static int SDLCALL I_AVIteratePacketsThread(void *param)
             {
                 // queue the audio buffer from the packet
                 I_AVFillAudioBuffer(&packet);
-                av_free_packet(&packet);
+                av_packet_unref(&packet);
             }
         }
         else
         {
-            av_free_packet(&packet);
+            av_packet_unref(&packet);
         }
     }
 
@@ -1181,7 +1146,7 @@ void I_AVStartVideoStream(const char *filename)
         return;
     }
     
-    thread = SDL_CreateThread(I_AVIteratePacketsThread, NULL);
+    thread = SDL_CreateThread(I_AVIteratePacketsThread, "sve_video", NULL);
 
     I_SetShowCursor(false);
 
