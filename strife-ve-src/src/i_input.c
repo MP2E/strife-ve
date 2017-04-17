@@ -24,6 +24,7 @@
 #include "doomtype.h"
 #include "d_event.h"
 #include "i_input.h"
+#include "i_joystick.h"
 #include "m_argv.h"
 #include "m_config.h"
 
